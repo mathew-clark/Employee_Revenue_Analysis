@@ -1,0 +1,151 @@
+--Business Question: What are the revenue totals for each employee? 
+
+--B: CREATE detailed table
+
+DROP TABLE IF EXISTS detailed_concat;
+CREATE TABLE detailed_concat(
+	amount money,
+    payment_date varchar(30),
+    rental_id INT,
+    staff_id INT,
+    full_name varchar(50),
+    inventory_id INT,
+    film_id INT,
+    rental_date TIMESTAMP WITHOUT TIME ZONE
+);
+
+SELECT * FROM detailed_concat;
+
+--CREATE summary table
+
+DROP TABLE IF EXISTS summary;
+CREATE TABLE summary (
+staff_id INT,
+full_name varchar(50),
+total_revenue money
+);
+
+--TO view empty summary table
+SELECT * FROM summary;
+
+
+DROP FUNCTION  full_name_function(first_name varchar(45), last_name varchar (45));
+CREATE OR REPLACE FUNCTION full_name_function(first_name varchar(45), last_name varchar (45))
+RETURNS varchar AS $full_name$
+DECLARE full_name varchar;
+BEGIN
+   RETURN CONCAT(first_name,' ',last_name);
+END; $full_name$ LANGUAGE plpgsql;
+
+--SELECT full_name_function('John', 'Smith');
+
+
+-- C. Extract raw data from DVD Rental database into detailed table
+
+DELETE FROM detailed_concat;
+INSERT INTO detailed_concat(
+amount,
+payment_date,
+rental_id,
+staff_id,
+full_name,
+inventory_id,
+film_id,
+rental_date)
+SELECT
+p.amount,
+p.payment_date,
+r.rental_id,
+s.staff_id,
+full_name_function(s.first_name,s.last_name),
+i.inventory_id,
+f.film_id,
+r.rental_date
+FROM staff AS s
+INNER JOIN payment AS p ON p.staff_id = s.staff_id
+INNER JOIN rental AS r ON r.rental_id = p.rental_id
+INNER JOIN inventory AS i ON i.inventory_id = r.inventory_id
+INNER JOIN film AS f ON f.film_id = i.film_id;
+
+--To view contents of detailed table
+--SELECT * FROM detailed;
+
+
+--To verify accuracy of data, compare the aggregated sales amount in the summary table to the raw data
+SELECT COUNT(payment_id) FROM payment;
+SELECT SUM(amount):: money FROM payment
+SELECT SUM(amount) FROM detailed_concat
+
+
+--D. CREATE FUNCTION refreshing the summary table with a data transformation
+--transforming sales_amount from the detailed table with an aggregation
+
+DROP FUNCTION refresh_summary_table();
+CREATE OR REPLACE FUNCTION refresh_summary_table()
+RETURNS trigger AS $$
+BEGIN
+  DELETE FROM summary;
+  INSERT INTO summary (staff_id, full_name, total_revenue)
+  SELECT staff_id, full_name, SUM(amount)
+  FROM detailed_concat
+  GROUP BY staff_id, full_name;
+  RETURN NEW;
+END; $$ LANGUAGE plpgsql;
+ 
+
+ --E. CREATE TRIGGER
+ --DROP TRIGGER refresh_summary_trigger ON detailed_concat;
+ CREATE TRIGGER refresh_summary_trigger
+ AFTER INSERT ON detailed_concat
+ FOR EACH STATEMENT
+ EXECUTE PROCEDURE refresh_summary_table();
+ 
+ 
+ 
+ --F. CREATE STORED PROCEDURE
+ 
+ --To be automated to run on a monthly basis, the last day of every month
+ --Use the external pfAgent application as a job scheduling tool
+CREATE OR REPLACE PROCEDURE refresh_reports()
+LANGUAGE plpgsql
+AS $$
+BEGIN
+DELETE FROM detailed_concat;
+INSERT INTO detailed_concat(
+amount,
+payment_date,
+rental_id,
+staff_id,
+full_name,
+inventory_id,
+film_id,
+rental_date)
+SELECT
+p.amount,
+p.payment_date,
+r.rental_id,
+s.staff_id,
+full_name_function(s.first_name,s.last_name),
+i.inventory_id,
+f.film_id,
+r.rental_date
+FROM staff AS s
+INNER JOIN payment AS p ON p.staff_id = s.staff_id
+INNER JOIN rental AS r ON r.rental_id = p.rental_id
+INNER JOIN inventory AS i ON i.inventory_id = r.inventory_id
+INNER JOIN film AS f ON f.film_id = i.film_id;
+END; $$;
+
+-- Verify code
+DELETE FROM detailed_concat;
+DELETE FROM summary;
+
+SELECT * FROM detailed_concat;
+SELECT * FROM summary;
+
+--TO call stored procedure
+CALL refresh_reports();
+
+--To view results
+SELECT * FROM detailed_concat;
+SELECT * FROM summary;
